@@ -58,33 +58,7 @@
 		"timeout": 10,
 		"overwrite_pin": 0,
 		"turn180": true
-	},
-	"ftp": {
-		"active": false,
-		"user": [
-			{
-				"name": "ftp",
-				"password": "ftp"
-			}
-		]
-	},
-	"mqtt": {
-		"active": false,
-		"server": "",
-		"port": 1883,
-		"name": "",
-		"password": "",
-		"topic": "LoraAPRS/Data",
-		"will_active": false,
-		"will_topic": "LoraAPRS/State",
-		"will_message": "offline",
-		"birth_message": "online"
-	},
-	"syslog": {
-		"active": false,
-		"server": "",
-		"port": 514
-	},
-	"ntp_server": "pool.ntp.org"
+	}
+	
 }
 
