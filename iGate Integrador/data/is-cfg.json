@@ -24,13 +24,13 @@
 		]
 	},
 	"beacon": {
-		"message": "iGATE Brainer",
+		"message": "iGATE",
 		"position": {
 			"latitude": 9.8599407,
 			"longitude": -83.9063452
 		},
 		"use_gps": false,
-		"timeout": 15,
+		"interval": 120,
 		"send_on_hf": false
 	},
 	"aprs_is": {
