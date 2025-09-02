@@ -30,7 +30,7 @@
 			"longitude": -83.9063452
 		},
 		"use_gps": false,
-		"timeout": 2,            
+		"timeout": 15,
 		"send_on_hf": false
 	},
 	"aprs_is": {
