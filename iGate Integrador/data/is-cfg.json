@@ -30,7 +30,7 @@
 			"longitude": -83.9063452
 		},
 		"use_gps": false,
-		"timeout": 15,
+		"timeout": 2,            
 		"send_on_hf": false
 	},
 	"aprs_is": {
@@ -87,3 +87,4 @@
 	},
 	"ntp_server": "pool.ntp.org"
 }
+
