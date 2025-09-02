@@ -16,6 +16,25 @@ const int   port     = 14580;
 const char* ssid     = "Ubnt1_Casa_4";
 const char* password = "cartago4";
 
+// ===== CONFIGURACIÓN LoRa =====
+// Pines específicos para LilyGO LoRa32 v1.6.1
+#define LORA_SCK     5
+#define LORA_MISO    19
+#define LORA_MOSI    27
+#define LORA_CS      18
+#define LORA_RST     14  // Diferente en v1.6.1
+#define LORA_IRQ     26  // DIO0
+#define LORA_BAND    433.775E6  // Para módulo de 433MHz
+
+// ===== OLED =====
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_SDA     4
+#define OLED_SCL     15
+#define OLED_RST     -1  // Reset específico para OLED en v1.6.1
+#define OLED_ADDR    0x3C
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RST);
+
 // ===== Cliente TCP APRS =====
 WiFiClient aprsClient;
 
@@ -24,15 +43,28 @@ unsigned long packetsReceived = 0;
 unsigned long lastReconnectAttempt = 0;
 const unsigned long RECONNECT_INTERVAL = 30000; // 30 segundos
 
+void mostrarOLED(String linea1, String linea2 = "", String linea3 = "") {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0,0);
+  display.println(linea1);
+  display.println(linea2);
+  display.println(linea3);
+  display.display();
+}
+
 bool connectToAPRSIS() {
   if (aprsClient.connect(server, port)) {
     Serial.println("Conectado a APRS-IS");
+    mostrarOLED("APRS-IS OK", server);
 
     // Autenticación APRS-IS
     String userStr = "user " + String(callsign) + " pass " + String(passcode) + " vers TTGO-LoRa iGate 1.0 filter r/10/-84/50\n";
     aprsClient.print(userStr);
     return true;
   } else {
+    mostrarOLED("Error APRS-IS");
     Serial.println("Fallo conexion APRS-IS");
     return false;
   }
@@ -41,9 +73,29 @@ bool connectToAPRSIS() {
 void setup() {
   Serial.begin(115200);
 
+  // --- Inicializar reset OLED ---
+  pinMode(OLED_RST, OUTPUT);
+  digitalWrite(OLED_RST, LOW);
+  delay(20);
+  digitalWrite(OLED_RST, HIGH);
+
+  // --- OLED ---
+  Wire.begin(OLED_SDA, OLED_SCL);
+  if(!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    Serial.println("OLED no encontrado!");
+    for(;;);
+  }
+  mostrarOLED("LilyGO LoRa32", "v1.6.1 iGate", "Iniciando...");
+
   // --- LoRa ---
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
   LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
+  
+  if (!LoRa.begin(LORA_BAND)) {
+    mostrarOLED("Error LoRa!", "Revisa conexiones");
+    Serial.println("Error iniciando LoRa!");
+    while (1);
+  }
   
   // Configurar parámetros LoRa para APRS
   LoRa.setSpreadingFactor(12);         // SF12 (más lento pero mayor alcance)
@@ -53,13 +105,16 @@ void setup() {
   LoRa.enableCrc();                    // Habilitar CRC
   
   Serial.println("LoRa iniciado correctamente");
+  mostrarOLED("LoRa OK", String(LORA_BAND/1E6, 1) + " MHz");
 
   // --- WiFi ---
   WiFi.begin(ssid, password);
+  mostrarOLED("Conectando WiFi", ssid);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
+  mostrarOLED("WiFi OK", WiFi.localIP().toString());
   Serial.println("WiFi conectado!");
   Serial.println(WiFi.localIP());
 
@@ -91,6 +146,8 @@ void processLoRaPacket(int packetSize) {
   String rssiStr = "RSSI: " + String(LoRa.packetRssi()) + " dBm";
   String snrStr = "SNR: " + String(LoRa.packetSnr()) + " dB";
   String packetsStr = "Paquetes: " + String(packetsReceived);
+  
+  mostrarOLED("Paquete recibido", rssiStr, packetsStr);
   
   // Enviar a APRS-IS si estamos conectados
   if (aprsClient.connected()) {
