@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <SPI.h>
 #include <LoRa.h>
+#include <algorithm>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -39,12 +40,16 @@ const float BEACON_LAT = 9.8599407;
 const float BEACON_LON = -83.9063452;
 const char* BEACON_COMMENT = "iGATE Brainer";
 const unsigned long BEACON_INTERVAL = 180000; // 3 min
+const unsigned long STATUS_INTERVAL = 180000;
 unsigned long lastBeaconTime = 0;
+unsigned long lastStatusTime = 0;
 
 WiFiClient aprsClient;
-unsigned long packetsLoRaRX = 0;
-unsigned long packetsAPRSIS_RX = 0;
-unsigned long packetsAPRSIS_TX = 0;
+unsigned long packetsReceived = 0;
+unsigned long packetsSentToAPRSIS = 0;
+unsigned long packetsReceivedFromAPRSIS = 0;
+unsigned long lastReconnectAttempt = 0;
+const unsigned long RECONNECT_INTERVAL = 30000;
 
 // ===== Función timestamp =====
 String getTimestamp() {
@@ -80,6 +85,24 @@ bool connectToAPRSIS() {
     Serial.print(getTimestamp() + "AUTH_SEND: ");
     Serial.print(auth);
 
+    delay(2000);
+    bool authSuccess = false;
+    unsigned long authStart = millis();
+    while (millis() - authStart < 5000) {
+      if (aprsClient.available()) {
+        String response = aprsClient.readStringUntil('\n');
+        Serial.println(getTimestamp() + "AUTH_RESP: " + response);
+        if (response.indexOf("verified") >= 0) {
+          authSuccess = true;
+        }
+      }
+      delay(100);
+    }
+    if (authSuccess) {
+      Serial.println(getTimestamp() + "✓ Autenticación exitosa, esperando tráfico...");
+    } else {
+      Serial.println(getTimestamp() + "✗ Problema con autenticación");
+    }
     return true;
   } else {
     Serial.println(getTimestamp() + "✗ Fallo conexión APRS-IS");
@@ -89,7 +112,12 @@ bool connectToAPRSIS() {
 
 // ===== Beacon =====
 void sendBeacon() {
-  if (!aprsClient.connected()) return;
+  if (!aprsClient.connected()) {
+    Serial.println(getTimestamp() + "No conectado a APRS-IS, no se puede enviar beacon");
+    return;
+  }
+  
+  Serial.println(getTimestamp() + "Preparando beacon...");
   
   int lat_deg = abs((int)BEACON_LAT);
   float lat_min = (abs(BEACON_LAT) - lat_deg) * 60.0;
@@ -112,12 +140,22 @@ void sendBeacon() {
   beaconPacket += BEACON_COMMENT;
   beaconPacket += "\n";
   
-  aprsClient.print(beaconPacket);
-  packetsAPRSIS_TX++; // contar TX
+  Serial.print(getTimestamp() + "BEACON_TX: ");
+  Serial.print(beaconPacket);
+  
+  int bytesSent = aprsClient.print(beaconPacket);
+  Serial.print(getTimestamp() + "BEACON_BYTES: ");
+  Serial.println(bytesSent);
+  
+  if (bytesSent > 0) {
+    packetsSentToAPRSIS++;
+    Serial.println(getTimestamp() + "✓ Beacon enviado correctamente");
+  } else {
+    Serial.println(getTimestamp() + "✗ Error enviando beacon");
+  }
+  
   lastBeaconTime = millis();
-
-  Serial.println(getTimestamp() + "BEACON_TX: " + beaconPacket);
-  Serial.println(getTimestamp() + "✓ Beacon enviado correctamente");
+  lastStatusTime = millis();
 }
 
 // ===== Procesar APRS entrante =====
@@ -128,11 +166,15 @@ void processAPRSTraffic() {
     buffer += c;
     if (c == '\n') {
       buffer.trim();
-      if (buffer.length() > 0 && buffer.charAt(0) != '#') {
-        packetsAPRSIS_RX++;
-        Serial.println(getTimestamp() + "SRV_SYS: " + buffer);
+      if (buffer.length() > 0) {
+        if (buffer.charAt(0) == '#') {
+          Serial.println(getTimestamp() + "SRV_SYS: " + buffer);
+        } else {
+          packetsReceivedFromAPRSIS++;
+          Serial.println(getTimestamp() + "🎯 APRS_RX [" + String(packetsReceivedFromAPRSIS) + "]: " + buffer);
+        }
+        buffer = "";
       }
-      buffer = "";
     }
   }
 }
@@ -144,36 +186,74 @@ void processLoRaPacket(int packetSize) {
   for (int i = 0; i < packetSize; i++) {
     packet += (char)LoRa.read();
   }
-  packetsLoRaRX++;
-  Serial.println(getTimestamp() + "LoRa RX: " + packet);
+  packetsReceived++;
+  Serial.println(getTimestamp() + "LORA_RX: " + packet);
 }
 
 // ===== Mostrar estado en OLED =====
-void updateOLED() {
+void showOLED(const String &line1, const String &line2) {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
-
   display.setCursor(0,0);
-  display.print("WiFi: ");
-  display.println(WiFi.status() == WL_CONNECTED ? ssid : "Descon.");
+  display.println(line1);
+  display.println(line2);
+  display.display();
+}
 
-  display.setCursor(0,10);
-  display.print("APRS-IS: ");
-  display.println(aprsClient.connected() ? server : "No conectado");
-
-  display.setCursor(0,20);
-  display.print("LoRa RX: ");
-  display.println(packetsLoRaRX);
-
-  display.setCursor(0,30);
-  display.print("APRS RX: ");
-  display.println(packetsAPRSIS_RX);
-
-  display.setCursor(0,40);
-  display.print("APRS TX: ");
-  display.println(packetsAPRSIS_TX);
-
+// ===== Función para mostrar información en tiempo real en OLED =====
+void updateOLEDStatus() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0,0);
+  
+  // Línea 1: Estado WiFi
+  String wifiStatus = "WiFi: ";
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiStatus += WiFi.SSID();
+  } else {
+    wifiStatus += "Desconectado";
+  }
+  display.println(wifiStatus);
+  
+  // Línea 2: Estado APRS-IS
+  String aprsStatus = "APRS-IS: ";
+  if (aprsClient.connected()) {
+    aprsStatus += "Conectado";
+    aprsStatus += " ";
+    aprsStatus += server;
+  } else {
+    aprsStatus += "Desconectado";
+  }
+  display.println(aprsStatus);
+  
+  // Línea 3: Paquetes recibidos por LoRa
+  String loraRx = "LoRa RX: ";
+  loraRx += String(packetsReceived);
+  display.println(loraRx);
+  
+  // Línea 4: Paquetes enviados/recibidos APRS-IS
+  String aprsPackets = "APRS TX/RX: ";
+  aprsPackets += String(packetsSentToAPRSIS);
+  aprsPackets += "/";
+  aprsPackets += String(packetsReceivedFromAPRSIS);
+  display.println(aprsPackets);
+  
+  // Línea 5: Dirección IP (si está conectado)
+  if (WiFi.status() == WL_CONNECTED) {
+    String ipLine = "IP: ";
+    ipLine += WiFi.localIP().toString();
+    display.println(ipLine);
+  }
+  
+  // Línea 6: Tiempo desde último beacon
+  unsigned long timeSinceBeacon = (millis() - lastBeaconTime) / 1000;
+  String beaconTime = "Beacon: ";
+  beaconTime += String(timeSinceBeacon);
+  beaconTime += "s";
+  display.println(beaconTime);
+  
   display.display();
 }
 
@@ -184,7 +264,7 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);  
 
-  // OLED
+  // Inicializar OLED
   Wire.begin(21, 22);
   if(!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println("❌ No se encontró OLED en dirección 0x3C");
@@ -194,30 +274,36 @@ void setup() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0,0);
-  display.println("Iniciando iGate...");
+  display.println("Hola LilyGO LoRa32!");
+  display.println("OLED funcionando :)");
   display.display();
 
-  // WiFi
+  Serial.println("\n" + getTimestamp() + "=== INICIANDO iGATE APRS ===");
+  
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
+    updateOLEDStatus(); // Actualizar OLED durante conexión
   }
   Serial.println("\n" + getTimestamp() + "✓ WiFi conectado!");
-  Serial.println(getTimestamp() + "IP: " + WiFi.localIP().toString());
+  updateOLEDStatus();
 
-  // LoRa
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
   LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
   if (!LoRa.begin(LORA_BAND)) {
     Serial.println(getTimestamp() + "✗ Error iniciando LoRa!");
+    updateOLEDStatus();
     return;
   }
-  Serial.println(getTimestamp() + "✓ LoRa iniciado (SF12, BW125kHz)");
+  Serial.println(getTimestamp() + "✓ LoRa iniciado");
+  updateOLEDStatus();
 
-  // APRS-IS
-  connectToAPRSIS();
-  sendBeacon();
+  if (connectToAPRSIS()) {
+    delay(2000);
+    sendBeacon();
+    updateOLEDStatus();
+  }
 }
 
 // ===== Loop =====
@@ -230,9 +316,17 @@ void loop() {
       sendBeacon();
     }
   }
-  updateOLED();
-  delay(200);
+  
+  // Actualizar OLED cada segundo
+  static unsigned long lastOLEDUpdate = 0;
+  if (millis() - lastOLEDUpdate > 1000) {
+    updateOLEDStatus();
+    lastOLEDUpdate = millis();
+  }
+  
+  delay(50);
 }
+
 
 
 
