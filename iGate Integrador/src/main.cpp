@@ -2,7 +2,9 @@
 #include <WiFi.h>
 #include <SPI.h>
 #include <LoRa.h>
-#include <algorithm>  // Necesario para std::min
+#include <algorithm>
+
+#define LED_PIN 25 
 
 // ===== CONFIGURACIÓN APRS =====
 const char* callsign = "Ti0tec5-7";   
@@ -239,6 +241,10 @@ void showStatus() {
 void setup() {
   Serial.begin(115200);
   delay(1000);
+
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH);  // enciende LED siempre
+
   
   Serial.println("\n" + getTimestamp() + "=== INICIANDO iGATE APRS ===");
   Serial.println(getTimestamp() + "Callsign: " + String(callsign));
