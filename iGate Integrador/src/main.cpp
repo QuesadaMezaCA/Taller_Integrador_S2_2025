@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <SPI.h>
 #include <LoRa.h>
+#include <algorithm>  // Necesario para std::min
 
 // ===== CONFIGURACIÓN APRS =====
 const char* callsign = "Ti0tec5-7";   
@@ -26,33 +27,49 @@ const char* password = "cartago4";
 const float BEACON_LAT = 9.8599407;
 const float BEACON_LON = -83.9063452;
 const char* BEACON_COMMENT = "iGATE Brainer";
-const unsigned long BEACON_INTERVAL = 120000; // 2 minutos
+const unsigned long BEACON_INTERVAL = 180000; // 3 minutos
+const unsigned long STATUS_INTERVAL = 180000;
 unsigned long lastBeaconTime = 0;
+unsigned long lastStatusTime = 0;
 
 WiFiClient aprsClient;
 unsigned long packetsReceived = 0;
+unsigned long packetsSentToAPRSIS = 0;
+unsigned long packetsReceivedFromAPRSIS = 0;
 unsigned long lastReconnectAttempt = 0;
 const unsigned long RECONNECT_INTERVAL = 30000;
 
+// Función para mostrar timestamp
+String getTimestamp() {
+  unsigned long seconds = millis() / 1000;
+  unsigned long minutes = seconds / 60;
+  seconds %= 60;
+  minutes %= 60;
+  char timestamp[12];
+  sprintf(timestamp, "[%02lu:%02lu] ", minutes, seconds);
+  return String(timestamp);
+}
+
 bool connectToAPRSIS() {
+  Serial.print(getTimestamp());
   Serial.print("Conectando a ");
   Serial.print(server);
   Serial.print(":");
   Serial.println(port);
   
   if (aprsClient.connect(server, port)) {
-    Serial.println("✓ Conectado a APRS-IS");
+    Serial.println(getTimestamp() + "✓ Conectado a APRS-IS");
     
     // Esperar respuesta inicial del servidor
     delay(1000);
     while (aprsClient.available()) {
       String response = aprsClient.readStringUntil('\n');
-      Serial.println("Servidor: " + response);
+      Serial.println(getTimestamp() + "SRV_INIT: " + response);
     }
     
     // Autenticación APRS-IS
     String auth = "user " + String(callsign) + " pass " + String(passcode) + " vers TTGO-LoRa-iGate 1.0\n";
-    Serial.print("Enviando auth: ");
+    Serial.print(getTimestamp() + "AUTH_SEND: ");
     Serial.print(auth);
     
     aprsClient.print(auth);
@@ -64,8 +81,8 @@ bool connectToAPRSIS() {
     while (millis() - authStart < 5000) {
       if (aprsClient.available()) {
         String response = aprsClient.readStringUntil('\n');
-        Serial.println("Auth response: " + response);
-        if (response.indexOf("logged in") >= 0 || response.indexOf("server") >= 0) {
+        Serial.println(getTimestamp() + "AUTH_RESP: " + response);
+        if (response.indexOf("logged in") >= 0 || response.indexOf("server") >= 0 || response.indexOf("verified") >= 0) {
           authSuccess = true;
         }
       }
@@ -73,25 +90,37 @@ bool connectToAPRSIS() {
     }
     
     if (authSuccess) {
-      Serial.println("✓ Autenticación exitosa");
+      Serial.println(getTimestamp() + "✓ Autenticación exitosa");
+      
+      // PROBAR DIFERENTES FILTROS - MÁS AMPLIOS
+      delay(1000);
+      
+      // Opción 1: Filtro de área amplio (200km)
+      String filter1 = "filter r/9.85/-83.90/200\n";
+      aprsClient.print(filter1);
+      Serial.println(getTimestamp() + "FILTRO_1: " + filter1);
+      delay(500);
+      
+      Serial.println(getTimestamp() + "✓ Filtros aplicados, esperando tráfico...");
+      
     } else {
-      Serial.println("✗ Problema con autenticación");
+      Serial.println(getTimestamp() + "✗ Problema con autenticación");
     }
     
     return true;
   } else {
-    Serial.println("✗ Fallo conexión APRS-IS");
+    Serial.println(getTimestamp() + "✗ Fallo conexión APRS-IS");
     return false;
   }
 }
 
 void sendBeacon() {
   if (!aprsClient.connected()) {
-    Serial.println("No conectado a APRS-IS, no se puede enviar beacon");
+    Serial.println(getTimestamp() + "No conectado a APRS-IS, no se puede enviar beacon");
     return;
   }
   
-  Serial.println("Preparando beacon...");
+  Serial.println(getTimestamp() + "Preparando beacon...");
   
   // Formatear latitud (DDMM.MMN)
   int lat_deg = abs((int)BEACON_LAT);
@@ -103,7 +132,7 @@ void sendBeacon() {
   float lon_min = (abs(BEACON_LON) - lon_deg) * 60.0;
   char lon_dir = BEACON_LON >= 0 ? 'E' : 'W';
   
-  // Construir paquete beacon - formato simplificado
+  // Construir paquete beacon
   String beaconPacket = String(callsign);
   beaconPacket += ">APRS,TCPIP:=";
   
@@ -117,71 +146,92 @@ void sendBeacon() {
   beaconPacket += BEACON_COMMENT;
   beaconPacket += "\n";
   
-  Serial.print("Enviando beacon: ");
+  Serial.print(getTimestamp() + "BEACON_TX: ");
   Serial.print(beaconPacket);
   
   int bytesSent = aprsClient.print(beaconPacket);
-  Serial.print("Bytes enviados: ");
+  Serial.print(getTimestamp() + "BEACON_BYTES: ");
   Serial.println(bytesSent);
   
-  // Verificar si se envió correctamente
   if (bytesSent > 0) {
-    Serial.println("✓ Beacon enviado correctamente");
+    Serial.println(getTimestamp() + "✓ Beacon enviado correctamente");
+    
+    // MOSTRAR STATUS INMEDIATAMENTE DESPUÉS DEL BEACON
+    Serial.println(getTimestamp() + "📊 STATUS: " + 
+                   "APRS-IS=" + (aprsClient.connected() ? "CONECTADO" : "DESCONECTADO") +
+                   ", LoRa_RX=" + String(packetsReceived) +
+                   ", APRS_TX=" + String(packetsSentToAPRSIS) +
+                   ", APRS_RX=" + String(packetsReceivedFromAPRSIS));
   } else {
-    Serial.println("✗ Error enviando beacon");
+    Serial.println(getTimestamp() + "✗ Error enviando beacon");
   }
   
   lastBeaconTime = millis();
+  lastStatusTime = millis(); // Resetear también el contador de status
 }
 
-void setup() {
-  Serial.begin(115200);
-  delay(1000);
+void processAPRSTraffic() {
+  static String buffer = "";
   
-  Serial.println("=== INICIANDO iGATE APRS ===");
-  Serial.println("Callsign: " + String(callsign));
-  
-  // --- WiFi ---
-  Serial.println("Conectando WiFi: " + String(ssid));
-  WiFi.begin(ssid, password);
-  
-  unsigned long wifiTimeout = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - wifiTimeout < 15000) {
-    delay(500);
-    Serial.print(".");
-  }
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✓ WiFi conectado!");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("\n✗ Error WiFi");
-    return;
-  }
-  
-  // --- LoRa ---
-  Serial.println("Iniciando LoRa...");
-  SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
-  LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
-  
-  if (!LoRa.begin(LORA_BAND)) {
-    Serial.println("✗ Error iniciando LoRa!");
-    return;
-  }
-  
-  LoRa.setSpreadingFactor(12);
-  LoRa.setSignalBandwidth(125E3);
-  LoRa.setCodingRate4(5);
-  LoRa.setSyncWord(0x12);
-  LoRa.enableCrc();
-  Serial.println("✓ LoRa iniciado");
-  
-  // --- APRS-IS ---
-  if (connectToAPRSIS()) {
-    delay(2000);
-    Serial.println("Enviando primer beacon...");
-    sendBeacon();
+  while (aprsClient.available()) {
+    char c = aprsClient.read();
+    buffer += c;
+    
+    // Procesar línea completa
+    if (c == '\n') {
+      buffer.trim();
+      
+      if (buffer.length() > 0) {
+        // Filtrar mensajes del sistema que empiezan con #
+        if (buffer.charAt(0) == '#') {
+          // MOSTRAR TODOS los mensajes del sistema para debug
+          Serial.println(getTimestamp() + "SRV_SYS: " + buffer);
+          
+          // Verificar si el servidor aceptó nuestros filtros
+          if (buffer.indexOf("filter") >= 0) {
+            Serial.println(getTimestamp() + "💡 FILTRO_ACEPTADO: " + buffer);
+          }
+        } 
+        // Filtrar mensajes de error
+        else if (buffer.indexOf("invalid") >= 0 || buffer.indexOf("error") >= 0) {
+          Serial.println(getTimestamp() + "SRV_ERR: " + buffer);
+        }
+        // Mostrar paquetes APRS normales
+        else {
+          packetsReceivedFromAPRSIS++;
+          Serial.println(getTimestamp() + "🎯 APRS_RX [" + String(packetsReceivedFromAPRSIS) + "]: " + buffer);
+          
+          // Mostrar información adicional para paquetes de posición
+          if (buffer.indexOf("!") >= 0 || buffer.indexOf("=") >= 0) {
+            // Extraer callsign del remitente
+            int arrowPos = buffer.indexOf('>');
+            if (arrowPos > 0) {
+              String sender = buffer.substring(0, arrowPos);
+              Serial.println(getTimestamp() + "       From: " + sender);
+              
+              // Mostrar distancia aproximada si tenemos datos de posición
+              int posIdx = buffer.indexOf('!');
+              if (posIdx == -1) posIdx = buffer.indexOf('=');
+              if (posIdx > 0) {
+                  int endPos = posIdx + 20;
+                  if (endPos > buffer.length()) {
+                      endPos = buffer.length();
+                  }
+                  Serial.println(getTimestamp() + "       Posición: " + buffer.substring(posIdx, endPos));
+              }
+            }
+          }
+        }
+        
+        buffer = "";
+      }
+    }
+    
+    // Limitar tamaño del buffer por seguridad
+    if (buffer.length() > 200) {
+      Serial.println(getTimestamp() + "BUFFER_OVERFLOW: " + buffer);
+      buffer = "";
+    }
   }
 }
 
@@ -193,24 +243,107 @@ void processLoRaPacket(int packetSize) {
     packet += (char)LoRa.read();
   }
   
-  Serial.print("LoRa RX: ");
-  Serial.println(packet);
-  
   packetsReceived++;
   
+  // Mostrar información detallada del paquete LoRa
+  Serial.println(getTimestamp() + "════════════════════════════════════════");
+  Serial.println(getTimestamp() + "LORA_RX [" + String(packetsReceived) + "]: " + packet);
+  Serial.print(getTimestamp() + "RSSI: ");
+  Serial.print(LoRa.packetRssi());
+  Serial.print(" dBm, SNR: ");
+  Serial.print(LoRa.packetSnr());
+  Serial.print(" dB, Size: ");
+  Serial.println(packetSize);
+  
+  // Enviar a APRS-IS si estamos conectados
   if (aprsClient.connected()) {
     String aprsPacket = packet;
     if (!aprsPacket.endsWith("\n")) {
       aprsPacket += "\n";
     }
     
-    aprsClient.print(aprsPacket);
-    Serial.println("Enviado a APRS-IS");
+    int bytesSent = aprsClient.print(aprsPacket);
+    if (bytesSent > 0) {
+      packetsSentToAPRSIS++;
+      
+      // Mostrar preview del paquete (máximo 60 caracteres)
+      int previewLength = packet.length();
+      if (previewLength > 60) {
+        previewLength = 60;
+      }
+      Serial.println(getTimestamp() + "APRS_TX [" + String(packetsSentToAPRSIS) + "]: " + packet.substring(0, previewLength) + "...");
+      Serial.println(getTimestamp() + "✓ Enviado a APRS-IS (" + String(bytesSent) + " bytes)");
+    } else {
+      Serial.println(getTimestamp() + "✗ Error enviando a APRS-IS");
+    }
+  } else {
+    Serial.println(getTimestamp() + "✗ No conectado a APRS-IS, paquete perdido");
+  }
+  Serial.println(getTimestamp() + "════════════════════════════════════════");
+}
+
+void showStatus() {
+  Serial.println(getTimestamp() + "📊 STATUS: " + 
+                 "APRS-IS=" + (aprsClient.connected() ? "CONECTADO" : "DESCONECTADO") +
+                 ", LoRa_RX=" + String(packetsReceived) +
+                 ", APRS_TX=" + String(packetsSentToAPRSIS) +
+                 ", APRS_RX=" + String(packetsReceivedFromAPRSIS));
+  lastStatusTime = millis();
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  
+  Serial.println("\n" + getTimestamp() + "=== INICIANDO iGATE APRS ===");
+  Serial.println(getTimestamp() + "Callsign: " + String(callsign));
+  
+  // --- WiFi ---
+  Serial.println(getTimestamp() + "Conectando WiFi: " + String(ssid));
+  WiFi.begin(ssid, password);
+  
+  unsigned long wifiTimeout = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiTimeout < 15000) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n" + getTimestamp() + "✓ WiFi conectado!");
+    Serial.print(getTimestamp() + "IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\n" + getTimestamp() + "✗ Error WiFi");
+    return;
+  }
+  
+  // --- LoRa ---
+  Serial.println(getTimestamp() + "Iniciando LoRa...");
+  SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
+  LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
+  
+  if (!LoRa.begin(LORA_BAND)) {
+    Serial.println(getTimestamp() + "✗ Error iniciando LoRa!");
+    return;
+  }
+  
+  LoRa.setSpreadingFactor(12);
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setCodingRate4(5);
+  LoRa.setSyncWord(0x12);
+  LoRa.enableCrc();
+  Serial.println(getTimestamp() + "✓ LoRa iniciado (SF12, BW125kHz)");
+  
+  // --- APRS-IS ---
+  if (connectToAPRSIS()) {
+    delay(2000);
+    Serial.println(getTimestamp() + "Enviando primer beacon...");
+    sendBeacon();
   }
 }
 
 void loop() {
-  // Procesar LoRa
+  // Procesar paquetes LoRa
   int packetSize = LoRa.parsePacket();
   if (packetSize) {
     processLoRaPacket(packetSize);
@@ -218,36 +351,30 @@ void loop() {
   
   // Mantener conexión APRS-IS
   if (!aprsClient.connected()) {
-    Serial.println("Desconectado de APRS-IS");
+    Serial.println(getTimestamp() + "⚠️  Desconectado de APRS-IS");
     if (millis() - lastReconnectAttempt > RECONNECT_INTERVAL) {
       lastReconnectAttempt = millis();
+      Serial.println(getTimestamp() + "🔄 Intentando reconexión...");
       if (connectToAPRSIS()) {
         delay(2000);
         sendBeacon();
       }
     }
   } else {
-    // Leer respuestas del servidor
-    if (aprsClient.available()) {
-      String response = aprsClient.readStringUntil('\n');
-      Serial.println("APRS-IS: " + response);
+    // Procesar tráfico entrante de APRS-IS
+    processAPRSTraffic();
+    
+    // Beacon periódico cada 3 minutos
+    if (millis() - lastBeaconTime > BEACON_INTERVAL) {
+      Serial.println(getTimestamp() + "⏰ Intervalo de beacon alcanzado");
+      sendBeacon(); // Esta función ahora también muestra el STATUS
     }
     
-    // Beacon periódico
-    if (millis() - lastBeaconTime > BEACON_INTERVAL) {
-      Serial.println("Intervalo de beacon alcanzado");
-      sendBeacon();
+    // Status independiente cada 3 minutos (si no se mostró con el beacon)
+    if (millis() - lastStatusTime > STATUS_INTERVAL) {
+      showStatus();
     }
   }
   
-  // Indicador de actividad cada 30 segundos
-  static unsigned long lastStatus = 0;
-  if (millis() - lastStatus > 30000) {
-    lastStatus = millis();
-    Serial.println("Status: Conectado=" + String(aprsClient.connected()) + 
-                   ", PaquetesRX=" + String(packetsReceived));
-  }
-  
-  delay(100);
+  delay(50);
 }
-
