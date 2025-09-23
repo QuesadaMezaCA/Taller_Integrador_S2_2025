@@ -1,18 +1,7 @@
 {
 	"callsign": "Ti0tec5-7",
 	"network": {
-		"DHCP": true,
-		"static": {
-			"ip": "192.168.0.100",
-			"subnet": "255.255.255.0",
-			"gateway": "192.168.0.1",
-			"dns1": "192.168.0.1",
-			"dns2": "192.168.0.2"
-		},
-		"hostname": {
-			"overwrite": false,
-			"name": "Ti0tec5-7"
-		}
+		"DHCP": true
 	},
 	"wifi": {
 		"active": true,
@@ -29,36 +18,16 @@
 			"latitude": 9.8599407,
 			"longitude": -83.9063452
 		},
-		"use_gps": false,
-		"interval": 120,
-		"send_on_hf": false
+		"interval": 180
 	},
 	"aprs_is": {
 		"active": true,
 		"passcode": "26556",
-		"server": "noam.aprs2.net",
-		"port": 14580,
-		"filter": ""
-	},
-	"digi": {
-		"active": false
+		"server": "rotate.aprs2.net",
+		"port": 14580
 	},
 	"lora": {
-		"frequency_rx": 433775000,
-		"gain_rx": 0,
-		"frequency_tx": 433775000,
-		"power": 20,
-		"spreading_factor": 12,
-		"signal_bandwidth": 125000,
-		"coding_rate4": 5,
-		"tx_enable": false
-	},
-	"display": {
-		"always_on": true,
-		"timeout": 10,
-		"overwrite_pin": 0,
-		"turn180": true
+		"frequency_rx": 433775000
 	}
-	
 }
 

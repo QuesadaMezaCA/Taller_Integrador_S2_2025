@@ -182,12 +182,48 @@ void processAPRSTraffic() {
 // ===== Procesar LoRa entrante =====
 void processLoRaPacket(int packetSize) {
   if (packetSize == 0) return;
-  String packet = "";
+  
+  packetsReceived++; // Incrementar contador de paquetes LoRa recibidos
+  
+  // Intentar leer como texto ASCII primero
+  String packetText = "";
+  bool isText = true;
+  
   for (int i = 0; i < packetSize; i++) {
-    packet += (char)LoRa.read();
+    char c = (char)LoRa.read();
+    packetText += c;
+    
+    // Verificar si el carácter es imprimible ASCII
+    if (c < 32 || c > 126) {
+      if (c != 10 && c != 13) { // Excluir newline y carriage return
+        isText = false;
+      }
+    }
   }
-  packetsReceived++;
-  Serial.println(getTimestamp() + "LORA_RX: " + packet);
+  
+  if (isText && packetText.length() > 0) {
+    // Es texto legible
+    packetText.trim();
+    Serial.println(getTimestamp() + "LORA_RX [" + String(packetsReceived) + "]: " + packetText);
+  } else {
+    // Es datos binarios, mostrar en formato hexadecimal
+    Serial.print(getTimestamp() + "LORA_RX_BIN [" + String(packetsReceived) + "]: ");
+    
+    // Reiniciar la lectura del paquete
+    LoRa.peek(); // Esto reinicia la lectura interna
+    
+    for (int i = 0; i < packetSize; i++) {
+      byte b = LoRa.read();
+      if (b < 16) Serial.print("0");
+      Serial.print(b, HEX);
+      Serial.print(" ");
+    }
+    Serial.println();
+    
+    // También mostrar información del paquete
+    Serial.println(getTimestamp() + "LORA_INFO: RSSI=" + String(LoRa.packetRssi()) + 
+                   "dBm, SNR=" + String(LoRa.packetSnr()) + "dB, Size=" + String(packetSize) + "bytes");
+  }
 }
 
 // ===== Mostrar estado en OLED =====
@@ -211,7 +247,12 @@ void updateOLEDStatus() {
   // Línea 1: Estado WiFi
   String wifiStatus = "WiFi: ";
   if (WiFi.status() == WL_CONNECTED) {
-    wifiStatus += WiFi.SSID();
+    // Acortar el SSID si es muy largo
+    String ssidShort = WiFi.SSID();
+    if (ssidShort.length() > 12) {
+      ssidShort = ssidShort.substring(0, 12) + "...";
+    }
+    wifiStatus += ssidShort;
   } else {
     wifiStatus += "Desconectado";
   }
@@ -220,11 +261,15 @@ void updateOLEDStatus() {
   // Línea 2: Estado APRS-IS
   String aprsStatus = "APRS-IS: ";
   if (aprsClient.connected()) {
-    aprsStatus += "Conectado";
-    aprsStatus += " ";
-    aprsStatus += server;
+    aprsStatus += "OK ";
+    // Mostrar servidor abreviado
+    String serverShort = String(server);
+    if (serverShort.length() > 10) {
+      serverShort = serverShort.substring(0, 10) + "...";
+    }
+    aprsStatus += serverShort;
   } else {
-    aprsStatus += "Desconectado";
+    aprsStatus += "OFF";
   }
   display.println(aprsStatus);
   
@@ -240,19 +285,15 @@ void updateOLEDStatus() {
   aprsPackets += String(packetsReceivedFromAPRSIS);
   display.println(aprsPackets);
   
-  // Línea 5: Dirección IP (si está conectado)
-  if (WiFi.status() == WL_CONNECTED) {
-    String ipLine = "IP: ";
-    ipLine += WiFi.localIP().toString();
-    display.println(ipLine);
+  // Línea 5: RSSI actual de LoRa si hay señal
+  if (packetsReceived > 0) {
+    String rssiLine = "RSSI: ";
+    rssiLine += String(LoRa.packetRssi());
+    rssiLine += "dBm";
+    display.println(rssiLine);
+  } else {
+    display.println("Esperando datos LoRa...");
   }
-  
-  // Línea 6: Tiempo desde último beacon
-  unsigned long timeSinceBeacon = (millis() - lastBeaconTime) / 1000;
-  String beaconTime = "Beacon: ";
-  beaconTime += String(timeSinceBeacon);
-  beaconTime += "s";
-  display.println(beaconTime);
   
   display.display();
 }
@@ -291,6 +332,12 @@ void setup() {
 
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
   LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
+  
+  // Configurar LoRa con parámetros más robustos
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setSpreadingFactor(7);
+  LoRa.setCodingRate4(5);
+  
   if (!LoRa.begin(LORA_BAND)) {
     Serial.println(getTimestamp() + "✗ Error iniciando LoRa!");
     updateOLEDStatus();
