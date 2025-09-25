@@ -50,7 +50,7 @@ unsigned long packetsReceived = 0;
 unsigned long packetsSentToAPRSIS = 0;
 unsigned long packetsReceivedFromAPRSIS = 0;
 unsigned long lastReconnectAttempt = 0;
-const unsigned long RECONNECT_INTERVAL = 30000;
+const unsigned long RECONNECT_INTERVAL = 30000; // 30 segundos
 
 // ===== VARIABLES PARA RECONEXIÓN WIFI =====
 unsigned long lastWifiCheck = 0;
@@ -58,6 +58,12 @@ const unsigned long WIFI_CHECK_INTERVAL = 10000; // Revisar WiFi cada 10 segundo
 bool wifiConnected = false;
 unsigned long lastWifiReconnectAttempt = 0;
 const unsigned long WIFI_RECONNECT_INTERVAL = 30000; // Intentar reconectar cada 30 segundos
+
+// ===== VARIABLES PARA DETECCIÓN DE CONEXIÓN APRS-IS =====
+unsigned long lastAPRSTrafficTime = 0;
+const unsigned long APRS_TIMEOUT = 120000; // 2 minutos sin tráfico = desconectado
+unsigned long lastServerPing = 0;
+const unsigned long SERVER_PING_INTERVAL = 60000; // Ping cada 1 minuto
 
 // ===== Función timestamp =====
 String getTimestamp() {
@@ -109,6 +115,12 @@ bool connectToAPRSIS() {
     return false;
   }
   
+  // Cerrar conexión anterior si existe
+  if (aprsClient.connected()) {
+    aprsClient.stop();
+    delay(1000);
+  }
+  
   Serial.print(getTimestamp());
   Serial.print("Conectando a ");
   Serial.print(server);
@@ -118,10 +130,14 @@ bool connectToAPRSIS() {
   if (aprsClient.connect(server, port)) {
     Serial.println(getTimestamp() + "✓ Conectado a APRS-IS");
     delay(1000);
+    
+    // Limpiar buffer inicial
     while (aprsClient.available()) {
       String response = aprsClient.readStringUntil('\n');
       Serial.println(getTimestamp() + "SRV_INIT: " + response);
     }
+    
+    // Autenticación
     String auth = "user " + String(callsign) +
                   " pass " + String(passcode) +
                   " vers TTGO-LoRa-iGate 1.0 " +
@@ -137,21 +153,55 @@ bool connectToAPRSIS() {
       if (aprsClient.available()) {
         String response = aprsClient.readStringUntil('\n');
         Serial.println(getTimestamp() + "AUTH_RESP: " + response);
-        if (response.indexOf("verified") >= 0) {
+        if (response.indexOf("verified") >= 0 || response.indexOf("logresp") >= 0) {
           authSuccess = true;
         }
       }
       delay(100);
     }
+    
     if (authSuccess) {
       Serial.println(getTimestamp() + "✓ Autenticación exitosa, esperando tráfico...");
+      lastAPRSTrafficTime = millis(); // Reset timer de tráfico
+      return true;
     } else {
       Serial.println(getTimestamp() + "✗ Problema con autenticación");
+      aprsClient.stop();
+      return false;
     }
-    return true;
   } else {
     Serial.println(getTimestamp() + "✗ Fallo conexión APRS-IS");
     return false;
+  }
+}
+
+// ===== Verificar estado de conexión APRS-IS =====
+bool checkAPRSISConnectionHealth() {
+  if (!aprsClient.connected()) {
+    return false;
+  }
+  
+  // Verificar si hay timeout por falta de tráfico
+  if (millis() - lastAPRSTrafficTime > APRS_TIMEOUT) {
+    Serial.println(getTimestamp() + "✗ Timeout APRS-IS (sin tráfico por " + String(APRS_TIMEOUT/1000) + "s)");
+    return false;
+  }
+  
+  // Verificar si el cliente está realmente conectado
+  if (!aprsClient.connected()) {
+    Serial.println(getTimestamp() + "✗ Conexión APRS-IS perdida");
+    return false;
+  }
+  
+  return true;
+}
+
+// ===== Enviar ping al servidor APRS-IS =====
+void sendServerPing() {
+  if (aprsClient.connected()) {
+    aprsClient.print("# Ping TTGO-iGate " + String(millis()) + "\n");
+    Serial.println(getTimestamp() + "Ping enviado al servidor");
+    lastServerPing = millis();
   }
 }
 
@@ -166,36 +216,49 @@ void checkWiFiConnection() {
     if (millis() - lastWifiReconnectAttempt > WIFI_RECONNECT_INTERVAL) {
       Serial.println(getTimestamp() + "Intentando reconectar WiFi...");
       lastWifiReconnectAttempt = millis();
-      
-      if (connectToWiFi()) {
-        // Reconectar a APRS-IS si WiFi se recupera
-        if (aprsClient.connected()) {
-          aprsClient.stop();
-          delay(1000);
-        }
-        connectToAPRSIS();
-      }
+      connectToWiFi();
     }
   } else {
     if (!wifiConnected) {
       Serial.println(getTimestamp() + "✓ WiFi reconectado");
       wifiConnected = true;
-      // Reconectar a APRS-IS después de recuperar WiFi
-      if (!aprsClient.connected()) {
-        connectToAPRSIS();
-      }
+      // Forzar reconexión a APRS-IS después de recuperar WiFi
+      lastReconnectAttempt = 0; // Permitir reconexión inmediata
     }
   }
 }
 
 // ===== Reconexión APRS-IS =====
 void checkAPRSISConnection() {
-  if (WiFi.status() == WL_CONNECTED && !aprsClient.connected()) {
-    if (millis() - lastReconnectAttempt > RECONNECT_INTERVAL) {
-      Serial.println(getTimestamp() + "Reconectando a APRS-IS...");
-      lastReconnectAttempt = millis();
-      connectToAPRSIS();
+  bool needsReconnect = false;
+  
+  // Verificar si necesita reconexión
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!aprsClient.connected()) {
+      needsReconnect = true;
+      Serial.println(getTimestamp() + "APRS-IS desconectado");
+    } else if (!checkAPRSISConnectionHealth()) {
+      needsReconnect = true;
     }
+  }
+  
+  // Intentar reconexión si es necesario
+  if (needsReconnect && millis() - lastReconnectAttempt > RECONNECT_INTERVAL) {
+    Serial.println(getTimestamp() + "Intentando reconectar a APRS-IS...");
+    lastReconnectAttempt = millis();
+    
+    if (connectToAPRSIS()) {
+      // Enviar beacon inmediatamente después de reconectar
+      lastBeaconTime = 0;
+      Serial.println(getTimestamp() + "✓ Reconexión APRS-IS exitosa");
+    } else {
+      Serial.println(getTimestamp() + "✗ Falló reconexión APRS-IS");
+    }
+  }
+  
+  // Enviar ping periódico para mantener conexión activa
+  if (aprsClient.connected() && millis() - lastServerPing > SERVER_PING_INTERVAL) {
+    sendServerPing();
   }
 }
 
@@ -239,6 +302,7 @@ void sendBeacon() {
   if (bytesSent > 0) {
     packetsSentToAPRSIS++;
     Serial.println(getTimestamp() + "✓ Beacon enviado correctamente");
+    lastAPRSTrafficTime = millis(); // Actualizar tiempo de último tráfico
   } else {
     Serial.println(getTimestamp() + "✗ Error enviando beacon");
   }
@@ -261,6 +325,7 @@ void processAPRSTraffic() {
         } else {
           packetsReceivedFromAPRSIS++;
           Serial.println(getTimestamp() + "🎯 APRS_RX [" + String(packetsReceivedFromAPRSIS) + "]: " + buffer);
+          lastAPRSTrafficTime = millis(); // Actualizar tiempo de último tráfico
         }
         buffer = "";
       }
@@ -315,17 +380,6 @@ void processLoRaPacket(int packetSize) {
   }
 }
 
-// ===== Mostrar estado en OLED =====
-void showOLED(const String &line1, const String &line2) {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0,0);
-  display.println(line1);
-  display.println(line2);
-  display.display();
-}
-
 // ===== Función para mostrar información en tiempo real en OLED =====
 void updateOLEDStatus() {
   display.clearDisplay();
@@ -333,58 +387,62 @@ void updateOLEDStatus() {
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0,0);
   
-  // Línea 1: Estado WiFi
-  String wifiStatus = "WiFi: ";
+  // Línea 1: WiFi
+  String line1 = "WiFi: ";
   if (WiFi.status() == WL_CONNECTED) {
-    // Acortar el SSID si es muy largo
     String ssidShort = WiFi.SSID();
     if (ssidShort.length() > 12) {
-      ssidShort = ssidShort.substring(0, 12) + "...";
+      ssidShort = ssidShort.substring(0, 12) + "..";
     }
-    wifiStatus += ssidShort;
-    wifiStatus += " " + String(WiFi.RSSI()) + "dBm";
+    line1 += ssidShort;
   } else {
-    wifiStatus += "RECONECTANDO";
+    line1 += "DESCONECTADO";
   }
-  display.println(wifiStatus);
+  display.println(line1);
+
+  // Línea 2: RSSI WiFi (si está conectado)
+  String line2 = "";
+  if (WiFi.status() == WL_CONNECTED) {
+    line2 = "WiFi RSSI: " + String(WiFi.RSSI()) + "dBm";
+  } else {
+    line2 = "Reconectando...";
+  }
+  display.println(line2);
   
-  // Línea 2: Estado APRS-IS
-  String aprsStatus = "APRS-IS: ";
+  // Línea 3: Servidor APRS
+  String line3 = "Srv: ";
   if (aprsClient.connected()) {
-    aprsStatus += "OK ";
-    // Mostrar servidor abreviado
     String serverShort = String(server);
-    if (serverShort.length() > 10) {
-      serverShort = serverShort.substring(0, 10) + "...";
+    if (serverShort.length() > 14) {
+      serverShort = serverShort.substring(0, 14) + "..";
     }
-    aprsStatus += serverShort;
+    line3 += serverShort;
   } else {
-    aprsStatus += "RECONECTANDO";
+    line3 += "DESCONECTADO";
   }
-  display.println(aprsStatus);
+  display.println(line3);
   
-  // Línea 3: Paquetes recibidos por LoRa
-  String loraRx = "LoRa RX: ";
-  loraRx += String(packetsReceived);
-  display.println(loraRx);
+  // Línea 4: Paquetes LoRa RX
+  String line4 = "LoRa RX: " + String(packetsReceived);
+  display.println(line4);
   
-  // Línea 4: Paquetes enviados/recibidos APRS-IS
-  String aprsPackets = "APRS TX/RX: ";
-  aprsPackets += String(packetsSentToAPRSIS);
-  aprsPackets += "/";
-  aprsPackets += String(packetsReceivedFromAPRSIS);
-  display.println(aprsPackets);
+  // Línea 5: Paquetes APRS TX/RX
+  String line5 = "APRS TX/RX: ";
+  line5 += String(packetsSentToAPRSIS);
+  line5 += "/";
+  line5 += String(packetsReceivedFromAPRSIS);
+  display.println(line5);
   
-  // Línea 5: Estado de conexión
-  String connStatus = "Estado: ";
+  // Línea 6: Estado del dispositivo
+  String line6 = "Estado: ";
   if (WiFi.status() == WL_CONNECTED && aprsClient.connected()) {
-    connStatus += "FULL";
+    line6 += "OPERATIVO";
   } else if (WiFi.status() == WL_CONNECTED) {
-    connStatus += "WIFI_ONLY";
+    line6 += "WIFI-SOLO";
   } else {
-    connStatus += "OFFLINE";
+    line6 += "OFFLINE";
   }
-  display.println(connStatus);
+  display.println(line6);
   
   display.display();
 }
@@ -419,25 +477,24 @@ void setup() {
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
   LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
   
-  // Configurar LoRa con parámetros más robustos
+  // Configurar LoRa
   LoRa.setSignalBandwidth(125E3);
   LoRa.setSpreadingFactor(7);
   LoRa.setCodingRate4(5);
   
   if (!LoRa.begin(LORA_BAND)) {
     Serial.println(getTimestamp() + "✗ Error iniciando LoRa!");
-    updateOLEDStatus();
     return;
   }
   Serial.println(getTimestamp() + "✓ LoRa iniciado");
-  updateOLEDStatus();
 
   // Conexión inicial APRS-IS
   if (connectToAPRSIS()) {
     delay(2000);
     sendBeacon();
-    updateOLEDStatus();
   }
+  
+  lastAPRSTrafficTime = millis(); // Inicializar timer de tráfico
 }
 
 // ===== Loop =====
