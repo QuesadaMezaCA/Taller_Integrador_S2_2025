@@ -1,6 +1,8 @@
-# Descripción General
+# Proyecto iGate LoRa32 con APRS-IS y OLED
 
-Este código implementa una iGate APRS (Automatic Packet Reporting System) utilizando un módulo LoRa ESP32. Funciona como puente entre redes APRS-IS (Internet) y dispositivos LoRa, retransmitiendo paquetes entre ambas interfaces.
+Este proyecto implementa un **iGate APRS** utilizando la placa **LilyGO LoRa32 v1.6.1 (ESP32 + LoRa SX1276)**.  
+El dispositivo recibe tramas APRS vía LoRa y las reenvía a **APRS-IS**, además de mostrar en una **pantalla OLED SSD1306** información en tiempo real sobre la conexión, servidor, red WiFi y paquetes RX/TX.
+
 
 # Arquitectura del Sistema
 
