@@ -36,8 +36,91 @@ Es una celda Li-ion/LiPo nominal 3.7 V, capacidad 2000 mAh cuya función es la f
 - Energía: batería alimenta la placa; si hay USB conectado, la placa puede estar alimentada por USB y —si la placa tiene cargador— la batería se está cargando simultáneamente.
 
 # Diagrama de bloques
-![](Imagenes/diagrama_de_bloques.jpg)
+<img src="Imagenes/diagrama_de_bloques.jpg" alt="Diagrama de bloques" width="300" height="800">
 
+# Maquina de Estados
+<img src="Imagenes/maquina_de_estados.jpg" alt="Diagrama de bloques" width="500" height="1000">
+
+## Explicaión maquina de estados
+### Inicio
+
+El sistema arranca y se prepara para comenzar la secuencia de inicialización.
+
+### Inicializar periféricos (OLED, LoRa, WiFi)
+
+Se configuran los módulos de hardware:
+- Pantalla OLED: para mostrar estado en tiempo real.
+- LoRa: para recepción de paquetes por radiofrecuencia.
+- WiFi: para enviar información al servidor APRS-IS.
+
+### Conectar WiFi
+
+El dispositivo intenta conectarse a la red WiFi configurada.
+
+Decisión:
+- Si NO se conecta, vuelve a intentar conexión.
+- Si sí se conecta, avanza al siguiente paso.
+
+### Conectar servidor APRS
+
+El sistema abre conexión TCP/IP al servidor APRS definido (ejemplo: rotate.aprs.net:14580).
+
+Decisión:
+- Si NO logra conexión, retorna a la etapa de conexión WiFi.
+- Si sí logra conexión, pasa al siguiente paso.
+
+### Verificación de respuesta del servidor
+
+Se envía un paquete de identificación (PIN o login APRS) al servidor para autenticar la sesión.
+
+Decisión:
+- Si NO hay respuesta, el sistema vuelve a enviar el PIN.
+- Si hay respuesta, se confirma la conexión y se actualiza el estado en la pantalla OLED.
+
+### Escuchar paquetes (LoRa y APRS-IS)
+
+El dispositivo entra en un estado de escucha activa:
+- Recibe paquetes de radio LoRa.
+- Recibe tráfico desde el servidor APRS.
+
+### Recepción de paquetes
+
+Decisión:
+
+- Si NO se reciben paquetes, se muestra en terminal el tráfico existente del servidor (información en segundo plano).
+- Si sí se reciben paquetes, avanza a procesamiento.
+
+### Procesar y reenviar paquetes
+
+Los paquetes recibidos por LoRa son:
+
+- Decodificados (AX.25/APRS).
+- Enviados al servidor APRS vía Internet.
+
+### Visualización en terminal
+
+Toda la información procesada (tráfico recibido y enviado) se muestra en la terminal para depuración y monitoreo. También se actualiza la pantalla OLED para indicar estado actual del sistema.
+
+# Planteamineto del diseño
+## Objetivo del sistema
+
+El iGATE diseñado tiene como objetivo recibir, procesar y reenviar paquetes APRS (Automatic Packet Reporting System) desde estaciones remotas, integrando funcionalidades de visualización y monitoreo en tiempo real, conectividad a Internet (APRS-IS) y reenvío eficiente mediante LoRa.
+
+## Arquitectura general del sistema
+
+El sistema se estructura en tres bloques principales
+
+### Adquisición de datos
+
+Tiene como función la captura de paquetes APRS provenientes de estaciones remotas vía LoRa, el hardware a utilizar es el módulo LilyGO LoRa32 T3 v1.6.1 (ESP32 + transceptor LoRa), el cual tiene como justificación que el ESP32 permite el manejo de protocolos de comunicación, procesamiento de paquetes y conectividad WiFi, LoRa asegura comunicación de largo alcance con bajo consumo.
+
+### Procesamiento de datos
+
+Tiene como función la decodificación de paquetes LoRa en formato AX.25, verificación de integridad y preparación para reenvío, el software a utilizar son librerías LoRa y AX.25 implementadas en Arduino IDE o PlatformIO, con las cuales se consigue una decodificación local la cual permite filtrar, validar y enriquecer la información antes de enviarla a APRS-IS, reduciendo tráfico innecesario y mejorando eficiencia.
+
+### Reenvío y visualización
+
+Tiene como función el Reenvío de paquetes decodificados a APRS-IS y visualización de estado del sistema para lo cual se utiliza una pantalla OLED integrada (Adafruit SSD1306) y conectividad WiFi del ESP32. La pantalla permite supervisar en tiempo real la conexión a WiFi, el estado de APRS-IS, y los contadores de paquetes RX/TX, facilitando mantenimiento y monitoreo sin necesidad de PC.
 
 
 # Arquitectura del Sistema
