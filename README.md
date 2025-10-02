@@ -3,6 +3,125 @@
 Este proyecto implementa un **iGate APRS** utilizando la placa **LilyGO LoRa32 v1.6.1 (ESP32 + LoRa SX1276)**.  
 El dispositivo recibe tramas APRS vía LoRa y las reenvía a **APRS-IS**, además de mostrar en una **pantalla OLED SSD1306** información en tiempo real sobre la conexión, servidor, red WiFi y paquetes RX/TX.
 
+# Infograma
+
+![](Imagenes/infograma.jpg)
+
+# Descripción de componentes
+
+## LILYGO LORA32 T3 v1.6.1
+
+Es una placa basada en ESP32 con radio LoRa integrado (habitualmente un transceptor SX127x), circuito de gestión de batería y pines para periféricos. Ejecuta el firmware que gestiona LoRa, Wi-Fi/Bluetooth y periféricos.
+Interfaces típicas: SPI (para el transceptor LoRa), I²C (para OLED), UART (puerto serie hacia USB), pines digitales para señales DIO del transceptor.
+
+## Antena LORA
+
+Función: radiar/recibir señales RF en la frecuencia LoRa seleccionada. Es crítica para alcance y calidad del enlace.
+Consejos de antena: usar el conector/antena adecuada, respetar la impedancia $50\Omega$, colocarla lejos de grandes masas metálicas y confirmar la frecuencia legal en tu país.
+
+## Pantalla OLED
+
+Uso habitual: mostrar información en tiempo real (RSSI, SNR, contador de paquetes RX/TX, estado de conexión Wi-Fi, nivel de batería, mensajes recientes), tiene una interfaz que es típicamente I²C (SDA/SCL) o SPI; módulos comunes usan controladores como SSD1306 es útil ya que permite monitoreo local sin necesidad de PC.
+
+## BATERÍA LP103454 3.7V 2000mAh
+
+Es una celda Li-ion/LiPo nominal 3.7 V, capacidad 2000 mAh cuya función es la fuente principal de energía para operación autónoma.
+
+# Flujo de datos
+
+- Recepción LoRa: la antena capta la señal → transceptor LoRa la entrega al ESP32 → firmware valida/decodifica paquete.
+- Procesado: ESP32 interpreta el payload (por ejemplo, un mensaje APRS), actualiza contadores y estado.
+- Visualización: la placa envía datos al OLED para mostrar recepción, RSSI, etc.
+- Reenvío / logging: si hay PC conectado por USB, la placa puede enviar por UART los datos para que el PC los almacene o los reenvíe a un servidor. Alternativamente, el ESP32 puede usar Wi-Fi para subir datos directamente a Internet.
+- Energía: batería alimenta la placa; si hay USB conectado, la placa puede estar alimentada por USB y —si la placa tiene cargador— la batería se está cargando simultáneamente.
+
+# Diagrama de bloques
+<img src="Imagenes/diagrama_de_bloques.jpg" alt="Diagrama de bloques" width="300" height="800">
+
+# Maquina de Estados
+<img src="Imagenes/maquina_de_estados.jpg" alt="Diagrama de bloques" width="500" height="1000">
+
+## Explicaión maquina de estados
+### Inicio
+
+El sistema arranca y se prepara para comenzar la secuencia de inicialización.
+
+### Inicializar periféricos (OLED, LoRa, WiFi)
+
+Se configuran los módulos de hardware:
+- Pantalla OLED: para mostrar estado en tiempo real.
+- LoRa: para recepción de paquetes por radiofrecuencia.
+- WiFi: para enviar información al servidor APRS-IS.
+
+### Conectar WiFi
+
+El dispositivo intenta conectarse a la red WiFi configurada.
+
+Decisión:
+- Si NO se conecta, vuelve a intentar conexión.
+- Si sí se conecta, avanza al siguiente paso.
+
+### Conectar servidor APRS
+
+El sistema abre conexión TCP/IP al servidor APRS definido (ejemplo: rotate.aprs.net:14580).
+
+Decisión:
+- Si NO logra conexión, retorna a la etapa de conexión WiFi.
+- Si sí logra conexión, pasa al siguiente paso.
+
+### Verificación de respuesta del servidor
+
+Se envía un paquete de identificación (PIN o login APRS) al servidor para autenticar la sesión.
+
+Decisión:
+- Si NO hay respuesta, el sistema vuelve a enviar el PIN.
+- Si hay respuesta, se confirma la conexión y se actualiza el estado en la pantalla OLED.
+
+### Escuchar paquetes (LoRa y APRS-IS)
+
+El dispositivo entra en un estado de escucha activa:
+- Recibe paquetes de radio LoRa.
+- Recibe tráfico desde el servidor APRS.
+
+### Recepción de paquetes
+
+Decisión:
+
+- Si NO se reciben paquetes, se muestra en terminal el tráfico existente del servidor (información en segundo plano).
+- Si sí se reciben paquetes, avanza a procesamiento.
+
+### Procesar y reenviar paquetes
+
+Los paquetes recibidos por LoRa son:
+
+- Decodificados (AX.25/APRS).
+- Enviados al servidor APRS vía Internet.
+
+### Visualización en terminal
+
+Toda la información procesada (tráfico recibido y enviado) se muestra en la terminal para depuración y monitoreo. También se actualiza la pantalla OLED para indicar estado actual del sistema.
+
+# Planteamineto del diseño
+## Objetivo del sistema
+
+El iGATE diseñado tiene como objetivo recibir, procesar y reenviar paquetes APRS (Automatic Packet Reporting System) desde estaciones remotas, integrando funcionalidades de visualización y monitoreo en tiempo real, conectividad a Internet (APRS-IS) y reenvío eficiente mediante LoRa.
+
+## Arquitectura general del sistema
+
+El sistema se estructura en tres bloques principales
+
+### Adquisición de datos
+
+Tiene como función la captura de paquetes APRS provenientes de estaciones remotas vía LoRa, el hardware a utilizar es el módulo LilyGO LoRa32 T3 v1.6.1 (ESP32 + transceptor LoRa), el cual tiene como justificación que el ESP32 permite el manejo de protocolos de comunicación, procesamiento de paquetes y conectividad WiFi, LoRa asegura comunicación de largo alcance con bajo consumo.
+
+### Procesamiento de datos
+
+Tiene como función la decodificación de paquetes LoRa en formato AX.25, verificación de integridad y preparación para reenvío, el software a utilizar son librerías LoRa y AX.25 implementadas en Arduino IDE o PlatformIO, con las cuales se consigue una decodificación local la cual permite filtrar, validar y enriquecer la información antes de enviarla a APRS-IS, reduciendo tráfico innecesario y mejorando eficiencia.
+
+### Reenvío y visualización
+
+Tiene como función el Reenvío de paquetes decodificados a APRS-IS y visualización de estado del sistema para lo cual se utiliza una pantalla OLED integrada (Adafruit SSD1306) y conectividad WiFi del ESP32. La pantalla permite supervisar en tiempo real la conexión a WiFi, el estado de APRS-IS, y los contadores de paquetes RX/TX, facilitando mantenimiento y monitoreo sin necesidad de PC.
+
 
 # Arquitectura del Sistema
 
