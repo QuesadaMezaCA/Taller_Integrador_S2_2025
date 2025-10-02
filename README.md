@@ -122,6 +122,9 @@ Tiene como función la decodificación de paquetes LoRa en formato AX.25, verifi
 
 Tiene como función el Reenvío de paquetes decodificados a APRS-IS y visualización de estado del sistema para lo cual se utiliza una pantalla OLED integrada (Adafruit SSD1306) y conectividad WiFi del ESP32. La pantalla permite supervisar en tiempo real la conexión a WiFi, el estado de APRS-IS, y los contadores de paquetes RX/TX, facilitando mantenimiento y monitoreo sin necesidad de PC.
 
+# Diagrama Eléctrico
+![](Imagenes/diagrama.jpg)
+
 
 # Arquitectura del Sistema
 
