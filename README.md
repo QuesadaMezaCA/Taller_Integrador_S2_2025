@@ -3,6 +3,42 @@
 Este proyecto implementa un **iGate APRS** utilizando la placa **LilyGO LoRa32 v1.6.1 (ESP32 + LoRa SX1276)**.  
 El dispositivo recibe tramas APRS vía LoRa y las reenvía a **APRS-IS**, además de mostrar en una **pantalla OLED SSD1306** información en tiempo real sobre la conexión, servidor, red WiFi y paquetes RX/TX.
 
+# Infograma
+
+![](Imagenes/infograma.jpg)
+
+# Descripción de componentes
+
+## LILYGO LORA32 T3 v1.6.1
+
+Es una placa basada en ESP32 con radio LoRa integrado (habitualmente un transceptor SX127x), circuito de gestión de batería y pines para periféricos. Ejecuta el firmware que gestiona LoRa, Wi-Fi/Bluetooth y periféricos.
+Interfaces típicas: SPI (para el transceptor LoRa), I²C (para OLED), UART (puerto serie hacia USB), pines digitales para señales DIO del transceptor.
+
+## Antena LORA
+
+Función: radiar/recibir señales RF en la frecuencia LoRa seleccionada. Es crítica para alcance y calidad del enlace.
+Consejos de antena: usar el conector/antena adecuada, respetar la impedancia $50\Omega$, colocarla lejos de grandes masas metálicas y confirmar la frecuencia legal en tu país.
+
+## Pantalla OLED
+
+Uso habitual: mostrar información en tiempo real (RSSI, SNR, contador de paquetes RX/TX, estado de conexión Wi-Fi, nivel de batería, mensajes recientes), tiene una interfaz que es típicamente I²C (SDA/SCL) o SPI; módulos comunes usan controladores como SSD1306 es útil ya que permite monitoreo local sin necesidad de PC.
+
+## BATERÍA LP103454 3.7V 2000mAh
+
+Es una celda Li-ion/LiPo nominal 3.7 V, capacidad 2000 mAh cuya función es la fuente principal de energía para operación autónoma.
+
+# Flujo de datos
+
+- Recepción LoRa: la antena capta la señal → transceptor LoRa la entrega al ESP32 → firmware valida/decodifica paquete.
+- Procesado: ESP32 interpreta el payload (por ejemplo, un mensaje APRS), actualiza contadores y estado.
+- Visualización: la placa envía datos al OLED para mostrar recepción, RSSI, etc.
+- Reenvío / logging: si hay PC conectado por USB, la placa puede enviar por UART los datos para que el PC los almacene o los reenvíe a un servidor. Alternativamente, el ESP32 puede usar Wi-Fi para subir datos directamente a Internet.
+- Energía: batería alimenta la placa; si hay USB conectado, la placa puede estar alimentada por USB y —si la placa tiene cargador— la batería se está cargando simultáneamente.
+
+# Diagrama de bloques
+![](Imagenes/diagrama_de_bloques.jpg)
+
+
 
 # Arquitectura del Sistema
 
