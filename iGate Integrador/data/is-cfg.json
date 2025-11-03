@@ -12,14 +12,6 @@
 			}
 		]
 	},
-	"beacon": {
-		"message": "iGATE Brainer",
-		"position": {
-			"latitude": 9.8599407,
-			"longitude": -83.9063452
-		},
-		"interval": 180
-	},
 	"aprs_is": {
 		"active": true,
 		"passcode": "26556",

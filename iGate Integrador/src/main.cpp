@@ -7,26 +7,21 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-// ===== LED de usuario =====
 #define LED_PIN 25 
 
-// ===== CONFIGURACIÓN OLED =====
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_ADDR 0x3C
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-// ===== CONFIGURACIÓN APRS =====
 const char* callsign = "Ti0tec5-7";   
 const char* passcode = "26556";       
 const char* server   = "rotate.aprs2.net";
 const int   port     = 14580;
 
-// ===== CONFIGURACIÓN WIFI =====
 const char* ssid     = "Ubnt1_Casa_4";
 const char* password = "cartago4";
 
-// ===== CONFIGURACIÓN LoRa =====
 #define LORA_SCK     5
 #define LORA_MISO    19
 #define LORA_MOSI    27
@@ -35,34 +30,29 @@ const char* password = "cartago4";
 #define LORA_IRQ     26
 #define LORA_BAND    433.775E6
 
-// ===== CONFIGURACIÓN BEACON =====
 const float BEACON_LAT = 9.8599407;
 const float BEACON_LON = -83.9063452;
-const char* BEACON_COMMENT = "iGATE Brainer";
-const unsigned long BEACON_INTERVAL = 180000; // 3 min
+const char* BEACON_COMMENT = "Escuela de Ingeniería Electrónica - ITCR";
+const unsigned long BEACON_INTERVAL = 180000;
 unsigned long lastBeaconTime = 0;
 
-// ===== VARIABLES DE CONEXIÓN =====
 WiFiClient aprsClient;
 unsigned long packetsReceived = 0;
 unsigned long packetsSentToAPRSIS = 0;
 unsigned long packetsReceivedFromAPRSIS = 0;
 unsigned long packetsSentToLoRa = 0;
 unsigned long lastReconnectAttempt = 0;
-const unsigned long RECONNECT_INTERVAL = 30000; // 30 segundos
+const unsigned long RECONNECT_INTERVAL = 30000;
 
-// ===== VARIABLES PARA RECONEXIÓN WIFI =====
 bool wifiConnected = false;
 unsigned long lastWifiReconnectAttempt = 0;
-const unsigned long WIFI_RECONNECT_INTERVAL = 30000; // 30 segundos
+const unsigned long WIFI_RECONNECT_INTERVAL = 30000;
 
-// ===== VARIABLES PARA DETECCIÓN DE CONEXIÓN APRS-IS =====
 unsigned long lastAPRSTrafficTime = 0;
-const unsigned long APRS_TIMEOUT = 120000; // 2 minutos sin tráfico = desconectado
+const unsigned long APRS_TIMEOUT = 120000;
 unsigned long lastServerPing = 0;
-const unsigned long SERVER_PING_INTERVAL = 60000; // Ping cada 1 minuto
+const unsigned long SERVER_PING_INTERVAL = 60000;
 
-// ===== Función timestamp =====
 String getTimestamp() {
   unsigned long seconds = millis() / 1000;
   unsigned long minutes = seconds / 60;
@@ -73,7 +63,6 @@ String getTimestamp() {
   return String(timestamp);
 }
 
-// ===== Conexión WiFi con reconexión automática =====
 bool connectToWiFi() {
   Serial.print(getTimestamp());
   Serial.print("Conectando a WiFi: ");
@@ -105,7 +94,6 @@ bool connectToWiFi() {
   }
 }
 
-// ===== Conexión APRS-IS =====
 bool connectToAPRSIS() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println(getTimestamp() + "No hay conexión WiFi, no se puede conectar a APRS-IS");
@@ -165,7 +153,6 @@ bool connectToAPRSIS() {
   }
 }
 
-// ===== Estructura AX.25 =====
 struct AX25Packet {
   String destination;
   String source;
@@ -173,7 +160,6 @@ struct AX25Packet {
   String info;
 };
 
-// ===== Parseo básico de AX.25 =====
 AX25Packet parseAX25(const String& packet) {
   AX25Packet ax;
   int sep1 = packet.indexOf('>');
@@ -201,7 +187,6 @@ AX25Packet parseAX25(const String& packet) {
   return ax;
 }
 
-// ===== Reenviar LoRa → APRS-IS con parseo AX.25 =====
 void forwardLoRaToAPRSIS() {
   int packetSize = LoRa.parsePacket();
   if (packetSize) {
@@ -215,7 +200,6 @@ void forwardLoRaToAPRSIS() {
     Serial.println(getTimestamp() + "📡 LoRa_RX [" + String(packetsReceived) + "]: " + loraPacket);
     Serial.println("   → Destino: " + ax.destination + " | Fuente: " + ax.source + " | Path: " + ax.path + " | Info: " + ax.info);
     
-    // Solo reenviar a APRS-IS si no es nuestro callsign
     if (ax.destination != callsign && aprsClient.connected()) {
       int bytesSent = aprsClient.print(loraPacket + "\n");
       if (bytesSent > 0) {
@@ -228,7 +212,6 @@ void forwardLoRaToAPRSIS() {
   }
 }
 
-// ===== Reenviar APRS-IS → LoRa =====
 void forwardAPRStoLoRa(const String& aprsPacket) {
   LoRa.beginPacket();
   LoRa.print(aprsPacket);
@@ -237,7 +220,6 @@ void forwardAPRStoLoRa(const String& aprsPacket) {
   packetsSentToLoRa++;
 }
 
-// ===== Procesar APRS entrante =====
 void processAPRSTraffic() {
   static String buffer = "";
   while (aprsClient.available()) {
@@ -260,7 +242,6 @@ void processAPRSTraffic() {
   }
 }
 
-// ===== Beacon =====
 void sendBeacon() {
   if (!aprsClient.connected()) return;
   
@@ -295,7 +276,6 @@ void sendBeacon() {
   lastBeaconTime = millis();
 }
 
-// ===== Funciones de conexión y ping =====
 bool checkAPRSISConnectionHealth() {
   if (!aprsClient.connected()) return false;
   if (millis() - lastAPRSTrafficTime > APRS_TIMEOUT) {
@@ -325,7 +305,7 @@ void checkWiFiConnection() {
     }
   } else if (!wifiConnected) {
     wifiConnected = true;
-    lastReconnectAttempt = 0; // permitir reconexión APRS-IS
+    lastReconnectAttempt = 0;
   }
 }
 
@@ -338,7 +318,6 @@ void checkAPRSISConnection() {
   if (aprsClient.connected() && millis() - lastServerPing > SERVER_PING_INTERVAL) sendServerPing();
 }
 
-// ===== OLED =====
 void updateOLEDStatus() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -354,7 +333,6 @@ void updateOLEDStatus() {
   display.display();
 }
 
-// ===== Setup =====
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -388,7 +366,6 @@ void setup() {
   lastAPRSTrafficTime = millis();
 }
 
-// ===== Loop =====
 void loop() {
   checkWiFiConnection();
   checkAPRSISConnection();
