@@ -187,19 +187,61 @@ AX25Packet parseAX25(const String& packet) {
   return ax;
 }
 
+String digipeatPacket(const AX25Packet& ax) {
+  if (ax.path.length() == 0) return "";
+
+  String newPath = ax.path;
+
+  String digiCall = String(callsign) + "*";
+
+  bool modified = false;
+
+  if (newPath.indexOf("WIDE1-1") >= 0) {
+    newPath.replace("WIDE1-1", digiCall);
+    modified = true;
+  }
+
+  else if (newPath.indexOf("WIDE2-1") >= 0) {
+    newPath.replace("WIDE2-1", digiCall);
+    modified = true;
+  }
+
+  if (!modified) return "";
+
+  String newPacket =
+      ax.destination + ">" + ax.source + "," + newPath + ":" + ax.info;
+
+  return newPacket;
+}
+
+void forwardLoRaToLoRa(const String& packet) {
+  LoRa.beginPacket();
+  LoRa.print(packet);
+  LoRa.endPacket();
+
+  Serial.println(getTimestamp() + "📡 DIGI TX → LoRa: " + packet);
+}
+
+
 void forwardLoRaToAPRSIS() {
   int packetSize = LoRa.parsePacket();
   if (packetSize) {
     String loraPacket = "";
     while (LoRa.available()) loraPacket += (char)LoRa.read();
-    
+
     packetsReceived++;
-    
+
     AX25Packet ax = parseAX25(loraPacket);
-    
+
     Serial.println(getTimestamp() + "📡 LoRa_RX [" + String(packetsReceived) + "]: " + loraPacket);
     Serial.println("   → Destino: " + ax.destination + " | Fuente: " + ax.source + " | Path: " + ax.path + " | Info: " + ax.info);
-    
+
+    String digiPacket = digipeatPacket(ax);
+    if (digiPacket.length() > 0) {
+      Serial.println(getTimestamp() + "🔁 Digipeando paquete...");
+      forwardLoRaToLoRa(digiPacket);
+    }
+
     if (ax.destination != callsign && aprsClient.connected()) {
       int bytesSent = aprsClient.print(loraPacket + "\n");
       if (bytesSent > 0) {
@@ -211,6 +253,8 @@ void forwardLoRaToAPRSIS() {
     }
   }
 }
+
+
 
 void forwardAPRStoLoRa(const String& aprsPacket) {
   LoRa.beginPacket();
