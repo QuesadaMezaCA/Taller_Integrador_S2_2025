@@ -6,6 +6,7 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <map>
 
 #define LED_PIN 25 
 
@@ -52,6 +53,43 @@ unsigned long lastAPRSTrafficTime = 0;
 const unsigned long APRS_TIMEOUT = 120000;
 unsigned long lastServerPing = 0;
 const unsigned long SERVER_PING_INTERVAL = 60000;
+
+// Añade estas variables globales
+struct RecentPacket {
+    String hash;
+    unsigned long timestamp;
+};
+
+RecentPacket recentPackets[10];
+const unsigned long DUP_TIMEOUT = 30000;
+
+bool isDuplicatePacket(const String& packet) {
+    int substrLength = (packet.length() > 20) ? 20 : packet.length();
+    String packetHash = String(packet.length()) + packet.substring(0, substrLength);
+    
+    unsigned long currentTime = millis();
+    
+    for (int i = 0; i < 10; i++) {
+        if (recentPackets[i].hash.length() > 0) {
+            if (currentTime - recentPackets[i].timestamp > DUP_TIMEOUT) {
+                recentPackets[i].hash = "";
+            }
+            else if (recentPackets[i].hash == packetHash) {
+                return true;
+            }
+        }
+    }
+    
+    for (int i = 0; i < 10; i++) {
+        if (recentPackets[i].hash.length() == 0) {
+            recentPackets[i].hash = packetHash;
+            recentPackets[i].timestamp = currentTime;
+            break;
+        }
+    }
+    
+    return false;
+}
 
 String getTimestamp() {
   unsigned long seconds = millis() / 1000;
@@ -188,30 +226,90 @@ AX25Packet parseAX25(const String& packet) {
 }
 
 String digipeatPacket(const AX25Packet& ax) {
-  if (ax.path.length() == 0) return "";
-
-  String newPath = ax.path;
-
-  String digiCall = String(callsign) + "*";
-
-  bool modified = false;
-
-  if (newPath.indexOf("WIDE1-1") >= 0) {
-    newPath.replace("WIDE1-1", digiCall);
-    modified = true;
-  }
-
-  else if (newPath.indexOf("WIDE2-1") >= 0) {
-    newPath.replace("WIDE2-1", digiCall);
-    modified = true;
-  }
-
-  if (!modified) return "";
-
-  String newPacket =
-      ax.destination + ">" + ax.source + "," + newPath + ":" + ax.info;
-
-  return newPacket;
+    if (ax.path.length() == 0) return "";
+    
+    String newPath = ax.path;
+    String digiCall = String(callsign);
+    
+    if (newPath.indexOf(digiCall) >= 0) {
+        return "";
+    }
+    
+    bool modified = false;
+    int pathCount = 0;
+    String paths[10];
+    
+    int start = 0;
+    int end = newPath.indexOf(',');
+    while (end >= 0 && pathCount < 9) {
+        paths[pathCount++] = newPath.substring(start, end);
+        start = end + 1;
+        end = newPath.indexOf(',', start);
+    }
+    paths[pathCount++] = newPath.substring(start);
+    
+    for (int i = 0; i < pathCount; i++) {
+        String currentPath = paths[i];
+        
+        if ((currentPath.startsWith("WIDE1") || 
+             currentPath.startsWith("WIDE2") ||
+             currentPath.startsWith("RELAY") ||
+             currentPath.startsWith("TRACE")) && 
+            currentPath.indexOf('*') < 0) {
+            
+            int dashIndex = currentPath.indexOf('-');
+            if (dashIndex > 0) {
+                int ssid = currentPath.substring(dashIndex + 1).toInt();
+                
+                if (ssid > 0) {
+                    
+                    paths[i] = currentPath.substring(0, dashIndex + 1) + String(ssid - 1);
+                    
+                    String newPathConstruction = "";
+                    for (int j = 0; j < pathCount; j++) {
+                        if (j > 0) newPathConstruction += ",";
+                        if (j == i) {
+                            newPathConstruction += digiCall + "*," + paths[j];
+                        } else {
+                            newPathConstruction += paths[j];
+                        }
+                    }
+                    
+                    newPath = newPathConstruction;
+                    modified = true;
+                    break;
+                }
+            } else if (currentPath == "WIDE1" || currentPath == "WIDE2" || 
+                      currentPath == "RELAY" || currentPath == "TRACE") {
+                
+                paths[i] = currentPath + "-0";
+                
+                String newPathConstruction = "";
+                for (int j = 0; j < pathCount; j++) {
+                    if (j > 0) newPathConstruction += ",";
+                    if (j == i) {
+                        newPathConstruction += digiCall + "*," + paths[j];
+                    } else {
+                        newPathConstruction += paths[j];
+                    }
+                }
+                
+                newPath = newPathConstruction;
+                modified = true;
+                break;
+            }
+        }
+    }
+    
+    if (!modified) return "";
+    
+    String newPacket = ax.destination + ">" + ax.source + "," + newPath + ":" + ax.info;
+    
+    Serial.println(getTimestamp() + "🔁 DIGIPEAT: " + ax.source + " via " + digiCall);
+    Serial.println("   Path original: " + ax.path);
+    Serial.println("   Path nuevo: " + newPath);
+    
+    return newPacket;
 }
 
 void forwardLoRaToLoRa(const String& packet) {
@@ -224,34 +322,43 @@ void forwardLoRaToLoRa(const String& packet) {
 
 
 void forwardLoRaToAPRSIS() {
-  int packetSize = LoRa.parsePacket();
-  if (packetSize) {
-    String loraPacket = "";
-    while (LoRa.available()) loraPacket += (char)LoRa.read();
+    int packetSize = LoRa.parsePacket();
+    if (packetSize) {
+        String loraPacket = "";
+        while (LoRa.available()) loraPacket += (char)LoRa.read();
 
-    packetsReceived++;
+        // Verificar si es duplicado
+        if (isDuplicatePacket(loraPacket)) {
+            Serial.println(getTimestamp() + "⚠️  Paquete duplicado ignorado");
+            return;
+        }
 
-    AX25Packet ax = parseAX25(loraPacket);
+        packetsReceived++;
 
-    Serial.println(getTimestamp() + "📡 LoRa_RX [" + String(packetsReceived) + "]: " + loraPacket);
-    Serial.println("   → Destino: " + ax.destination + " | Fuente: " + ax.source + " | Path: " + ax.path + " | Info: " + ax.info);
+        AX25Packet ax = parseAX25(loraPacket);
 
-    String digiPacket = digipeatPacket(ax);
-    if (digiPacket.length() > 0) {
-      Serial.println(getTimestamp() + "🔁 Digipeando paquete...");
-      forwardLoRaToLoRa(digiPacket);
+        Serial.println(getTimestamp() + "📡 LoRa_RX [" + String(packetsReceived) + "]: " + loraPacket);
+
+        // Solo digipear si no somos el origen
+        if (ax.source != callsign) {
+            String digiPacket = digipeatPacket(ax);
+            if (digiPacket.length() > 0) {
+                Serial.println(getTimestamp() + "🔁 Digipeando paquete...");
+                forwardLoRaToLoRa(digiPacket);
+            }
+        }
+
+        // Reenviar a APRS-IS
+        if (ax.destination != callsign && aprsClient.connected()) {
+            int bytesSent = aprsClient.print(loraPacket + "\n");
+            if (bytesSent > 0) {
+                packetsSentToAPRSIS++;
+                Serial.println(getTimestamp() + "➡️ Reenviado a APRS-IS [" + String(packetsSentToAPRSIS) + "]");
+            } else {
+                Serial.println(getTimestamp() + "✗ Error reenviando a APRS-IS");
+            }
+        }
     }
-
-    if (ax.destination != callsign && aprsClient.connected()) {
-      int bytesSent = aprsClient.print(loraPacket + "\n");
-      if (bytesSent > 0) {
-        packetsSentToAPRSIS++;
-        Serial.println(getTimestamp() + "➡️ Reenviado a APRS-IS [" + String(packetsSentToAPRSIS) + "]");
-      } else {
-        Serial.println(getTimestamp() + "✗ Error reenviando a APRS-IS");
-      }
-    }
-  }
 }
 
 
