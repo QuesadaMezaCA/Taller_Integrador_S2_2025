@@ -59,6 +59,8 @@ const unsigned long SERVER_PING_INTERVAL = 60000;
 const unsigned long TELEMETRY_INTERVAL = 60000;
 unsigned long lastTelemetryTime = 0;
 
+unsigned long packetsDigipeated = 0;
+
 
 struct RecentPacket {
     String hash;
@@ -313,6 +315,8 @@ void forwardLoRaToLoRa(const String& packet) {
   LoRa.print(packet);
   LoRa.endPacket();
 
+  packetsDigipeated++;
+
   Serial.println(getTimestamp() + "📡 DIGI TX → LoRa: " + packet);
 }
 
@@ -323,7 +327,6 @@ void forwardLoRaToAPRSIS() {
         String loraPacket = "";
         while (LoRa.available()) loraPacket += (char)LoRa.read();
 
-        // Verificar si es duplicado
         if (isDuplicatePacket(loraPacket)) {
             Serial.println(getTimestamp() + "⚠️  Paquete duplicado ignorado");
             return;
@@ -335,7 +338,6 @@ void forwardLoRaToAPRSIS() {
 
         Serial.println(getTimestamp() + "📡 LoRa_RX [" + String(packetsReceived) + "]: " + loraPacket);
 
-        // Solo digipear si no somos el origen
         if (ax.source != callsign) {
             String digiPacket = digipeatPacket(ax);
             if (digiPacket.length() > 0) {
@@ -344,7 +346,6 @@ void forwardLoRaToAPRSIS() {
             }
         }
 
-        // Reenviar a APRS-IS
         if (ax.destination != callsign && aprsClient.connected()) {
             int bytesSent = aprsClient.print(loraPacket + "\n");
             if (bytesSent > 0) {
@@ -356,8 +357,6 @@ void forwardLoRaToAPRSIS() {
         }
     }
 }
-
-
 
 void forwardAPRStoLoRa(const String& aprsPacket) {
   LoRa.beginPacket();
@@ -532,6 +531,7 @@ void updateOLEDStatus() {
   display.println("Srv: " + String(aprsClient.connected() ? server : "DESCONECTADO"));
   display.println("LoRa RX/TX: " + String(packetsReceived) + "/" + String(packetsSentToLoRa));
   display.println("APRS TX/RX: " + String(packetsSentToAPRSIS) + "/" + String(packetsReceivedFromAPRSIS));
+  display.println("Digi: " + String(packetsDigipeated));
   display.println("Estado: " + String((WiFi.status() == WL_CONNECTED && aprsClient.connected()) ? "OPERATIVO" : (WiFi.status() == WL_CONNECTED ? "WIFI-SOLO" : "OFFLINE")));
   display.display();
 }
