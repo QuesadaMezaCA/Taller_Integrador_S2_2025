@@ -15,6 +15,8 @@
 #define OLED_ADDR 0x3C
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
+const int BATTERY_ADC_PIN = 35;
+
 const char* callsign = "Ti0tec5-7";   
 const char* passcode = "26556";       
 const char* server   = "rotate.aprs2.net";
@@ -54,7 +56,10 @@ const unsigned long APRS_TIMEOUT = 120000;
 unsigned long lastServerPing = 0;
 const unsigned long SERVER_PING_INTERVAL = 60000;
 
-// Añade estas variables globales
+const unsigned long TELEMETRY_INTERVAL = 60000;
+unsigned long lastTelemetryTime = 0;
+
+
 struct RecentPacket {
     String hash;
     unsigned long timestamp;
@@ -91,6 +96,12 @@ bool isDuplicatePacket(const String& packet) {
     return false;
 }
 
+float getBatteryVoltage() {
+  int raw = analogRead(BATTERY_ADC_PIN);
+  float voltage = ((float)raw / 4095.0) * 3.3 * 2;
+  return voltage;
+}
+
 String getTimestamp() {
   unsigned long seconds = millis() / 1000;
   unsigned long minutes = seconds / 60;
@@ -99,6 +110,21 @@ String getTimestamp() {
   char timestamp[12];
   sprintf(timestamp, "[%02lu:%02lu] ", minutes, seconds);
   return String(timestamp);
+}
+
+void drainAPRSServer(unsigned long timeout_ms = 500) {
+  unsigned long start = millis();
+  while (millis() - start < timeout_ms) {
+    while (aprsClient.available()) {
+      String resp = aprsClient.readStringUntil('\n');
+      resp.trim();
+      if (resp.length() > 0) {
+        Serial.println(getTimestamp() + "SRV_RESP: " + resp);
+      }
+      start = millis();
+    }
+    delay(10);
+  }
 }
 
 bool connectToWiFi() {
@@ -226,91 +252,61 @@ AX25Packet parseAX25(const String& packet) {
 }
 
 String digipeatPacket(const AX25Packet& ax) {
-    if (ax.path.length() == 0) return "";
-    
-    String newPath = ax.path;
-    String digiCall = String(callsign);
-    
-    if (newPath.indexOf(digiCall) >= 0) {
+
+    if (!(ax.path.indexOf("WIDE") >= 0 ||
+          ax.path.indexOf("TRACE") >= 0 ||
+          ax.path.indexOf("RELAY") >= 0)) {
         return "";
     }
-    
-    bool modified = false;
-    int pathCount = 0;
-    String paths[10];
-    
-    int start = 0;
-    int end = newPath.indexOf(',');
-    while (end >= 0 && pathCount < 9) {
-        paths[pathCount++] = newPath.substring(start, end);
-        start = end + 1;
-        end = newPath.indexOf(',', start);
-    }
-    paths[pathCount++] = newPath.substring(start);
-    
-    for (int i = 0; i < pathCount; i++) {
-        String currentPath = paths[i];
-        
-        if ((currentPath.startsWith("WIDE1") || 
-             currentPath.startsWith("WIDE2") ||
-             currentPath.startsWith("RELAY") ||
-             currentPath.startsWith("TRACE")) && 
-            currentPath.indexOf('*') < 0) {
-            
-            int dashIndex = currentPath.indexOf('-');
-            if (dashIndex > 0) {
-                int ssid = currentPath.substring(dashIndex + 1).toInt();
-                
-                if (ssid > 0) {
-                    
-                    paths[i] = currentPath.substring(0, dashIndex + 1) + String(ssid - 1);
-                    
-                    String newPathConstruction = "";
-                    for (int j = 0; j < pathCount; j++) {
-                        if (j > 0) newPathConstruction += ",";
-                        if (j == i) {
-                            newPathConstruction += digiCall + "*," + paths[j];
-                        } else {
-                            newPathConstruction += paths[j];
-                        }
-                    }
-                    
-                    newPath = newPathConstruction;
-                    modified = true;
-                    break;
+
+    if (ax.path.indexOf("*") >= 0) return "";
+
+    if (ax.path.indexOf("TCPIP") >= 0 ||
+        ax.path.indexOf("TCPXX") >= 0 ||
+        ax.path.indexOf("NOGATE") >= 0 ||
+        ax.path.indexOf("RFONLY") >= 0) return "";
+
+    if (ax.source == callsign) return "";
+
+    String newPath = "";
+    bool digipeated = false;
+
+    int pos = 0;
+    while (pos < ax.path.length()) {
+        int comma = ax.path.indexOf(',', pos);
+        if (comma < 0) comma = ax.path.length();
+
+        String field = ax.path.substring(pos, comma);
+
+        if (!digipeated &&
+           (field.startsWith("WIDE1") ||
+            field.startsWith("WIDE2") ||
+            field.startsWith("TRACE") ||
+            field.startsWith("RELAY"))) {
+
+            int dash = field.indexOf('-');
+            if (dash > 0) {
+                int n = field.substring(dash + 1).toInt();
+                if (n > 0) {
+                    field = field.substring(0, dash) + "-" + String(n - 1);
                 }
-            } else if (currentPath == "WIDE1" || currentPath == "WIDE2" || 
-                      currentPath == "RELAY" || currentPath == "TRACE") {
-                
-                paths[i] = currentPath + "-0";
-                
-                String newPathConstruction = "";
-                for (int j = 0; j < pathCount; j++) {
-                    if (j > 0) newPathConstruction += ",";
-                    if (j == i) {
-                        newPathConstruction += digiCall + "*," + paths[j];
-                    } else {
-                        newPathConstruction += paths[j];
-                    }
-                }
-                
-                newPath = newPathConstruction;
-                modified = true;
-                break;
             }
+
+            newPath += String(callsign) + "*,";
+            digipeated = true;
         }
+
+        newPath += field;
+
+        if (comma < ax.path.length()) newPath += ",";
+        pos = comma + 1;
     }
-    
-    if (!modified) return "";
-    
-    String newPacket = ax.destination + ">" + ax.source + "," + newPath + ":" + ax.info;
-    
-    Serial.println(getTimestamp() + "🔁 DIGIPEAT: " + ax.source + " via " + digiCall);
-    Serial.println("   Path original: " + ax.path);
-    Serial.println("   Path nuevo: " + newPath);
-    
-    return newPacket;
+
+    if (!digipeated) return "";
+
+    return ax.source + ">" + ax.destination + "," + newPath + ":" + ax.info;
 }
+
 
 void forwardLoRaToLoRa(const String& packet) {
   LoRa.beginPacket();
@@ -427,6 +423,62 @@ void sendBeacon() {
   lastBeaconTime = millis();
 }
 
+void sendTelemetry() {
+  if (!aprsClient.connected()) return;
+
+  float vbatt = getBatteryVoltage();
+  int vbatt_scaled = (int)(vbatt * 10.0 + 0.5);
+
+  static int seq = 0;
+  seq = (seq + 1) % 1000;
+
+  char tpacket[160];
+  sprintf(tpacket, "%s>APRS,TCPIP*:T#%03d,%03d,000,000,000,000,Battery\n",
+          callsign, seq, vbatt_scaled);
+
+  Serial.print(getTimestamp()); Serial.print("TELEM_TX -> "); Serial.print(tpacket);
+  aprsClient.print(tpacket);
+
+  drainAPRSServer(800);
+
+  packetsSentToAPRSIS++;
+}
+
+
+void sendTelemetryDefinitions() {
+  if (!aprsClient.connected()) return;
+
+  String header = String(callsign) + ">APRS,TCPIP*:";
+
+  String parm = header + "PARM.Batt,Unused2,Unused3,Unused4,Unused5,Unused6\n";
+  String unit = header + "UNIT.V,none,none,none,none,none\n";
+
+  String eqns = header + "EQNS.0,0.1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0\n";
+
+  String bits = header + "BITS.00000000,UNUSED,UNUSED,UNUSED,UNUSED,UNUSED,UNUSED,UNUSED,UNUSED\n";
+
+  Serial.println(getTimestamp() + "TELEM_CFG -> Enviando PARM");
+  aprsClient.print(parm); drainAPRSServer();
+  delay(150);
+
+  Serial.println(getTimestamp() + "TELEM_CFG -> Enviando UNIT");
+  aprsClient.print(unit); drainAPRSServer();
+  delay(150);
+
+  Serial.println(getTimestamp() + "TELEM_CFG -> Enviando EQNS");
+  aprsClient.print(eqns); drainAPRSServer();
+  delay(150);
+
+  Serial.println(getTimestamp() + "TELEM_CFG -> Enviando BITS");
+  aprsClient.print(bits); drainAPRSServer();
+  delay(150);
+
+  Serial.println(getTimestamp() + "📡 Telemetry definitions enviadas (intento)");
+}
+
+
+
+
 bool checkAPRSISConnectionHealth() {
   if (!aprsClient.connected()) return false;
   if (millis() - lastAPRSTrafficTime > APRS_TIMEOUT) {
@@ -490,6 +542,9 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);
 
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
+
   Wire.begin(21, 22);
   if(!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println("❌ No se encontró OLED en dirección 0x3C");
@@ -513,7 +568,11 @@ void setup() {
   }
   Serial.println(getTimestamp() + "✓ LoRa iniciado");
 
-  if (connectToAPRSIS()) sendBeacon();
+  if (connectToAPRSIS()) {
+    sendBeacon();
+    sendTelemetryDefinitions();
+  }
+
   lastAPRSTrafficTime = millis();
 }
 
@@ -522,7 +581,14 @@ void loop() {
   checkAPRSISConnection();
 
   if (aprsClient.connected()) {
+
     processAPRSTraffic();
+
+    if (millis() - lastTelemetryTime > TELEMETRY_INTERVAL) {
+        sendTelemetry();
+        lastTelemetryTime = millis();
+    }
+
     if (millis() - lastBeaconTime > BEACON_INTERVAL) sendBeacon();
   }
 
