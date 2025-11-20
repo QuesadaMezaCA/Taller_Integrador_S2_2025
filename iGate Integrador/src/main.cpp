@@ -531,7 +531,7 @@ void updateOLEDStatus() {
   display.println("Srv: " + String(aprsClient.connected() ? server : "DESCONECTADO"));
   display.println("LoRa RX/TX: " + String(packetsReceived) + "/" + String(packetsSentToLoRa));
   display.println("APRS TX/RX: " + String(packetsSentToAPRSIS) + "/" + String(packetsReceivedFromAPRSIS));
-  display.println("Digi: " + String(packetsDigipeated));
+  display.println("Batt: " + String(getBatteryVoltage(), 2) + " V");
   display.println("Estado: " + String((WiFi.status() == WL_CONNECTED && aprsClient.connected()) ? "OPERATIVO" : (WiFi.status() == WL_CONNECTED ? "WIFI-SOLO" : "OFFLINE")));
   display.display();
 }
